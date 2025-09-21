@@ -1,975 +1,658 @@
-
-
-
-
 import 'dart:convert';
-import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:pdf/pdf.dart';
-import 'package:printing/printing.dart';
-import 'package:flutter_animate/flutter_animate.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
 
-// --- Helper Functions & Models ---
-IconData _getIconForUnit(String unit) {
-  switch (unit) {
-    case 'متر': return Icons.square_foot_rounded;
-    case 'عدد': return Icons.push_pin_rounded;
-    case 'خدمات': return Icons.design_services_rounded;
-    case 'متر مربع': return Icons.aspect_ratio_rounded;
-    case 'قواره': return Icons.view_quilt_rounded;
-    default: return Icons.sell_rounded;
-  }
-}
-
-String _persianToEnglishNumbers(String input) {
-  const persian = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
-  const arabic = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
-  const english = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
-
-  for (int i = 0; i < english.length; i++) {
-    input = input.replaceAll(persian[i], english[i]).replaceAll(arabic[i], english[i]);
-  }
-  return input;
-}
-
-String _numberToPersianWords(int number) {
-  if (number == 0) return 'صفر';
-
-  final List<String> yekan = ["", "یک", "دو", "سه", "چهار", "پنج", "شش", "هفت", "هشت", "نه"];
-  final List<String> dahgan = ["", "", "بیست", "سی", "چهل", "پنجاه", "شصت", "هفتاد", "هشتاد", "نود"];
-  final List<String> dahyek = ["ده", "یازده", "دوازده", "سیزده", "چهارده", "پانزده", "شانزده", "هفده", "هجده", "نوزده"];
-  final List<String> sadgan = ["", "یکصد", "دویست", "سیصد", "چهارصد", "پانصد", "ششصد", "هفتصد", "هشتصد", "نهصد"];
-  final List<String> basex = ["", "هزار", "میلیون", "میلیارد"];
-
-  String convertTo3Digits(int num) {
-    String s = "";
-    int d12 = num % 100;
-    int d3 = (num / 100).floor();
-    if (d3 != 0) s = sadgan[d3] + " و ";
-    if ((d12 >= 10) && (d12 <= 19)) {
-      s = s + dahyek[d12 - 10];
-    } else {
-      int d2 = (d12 / 10).floor();
-      if (d2 != 0) s = s + dahgan[d2] + " و ";
-      int d1 = d12 % 10;
-      if (d1 != 0) s = s + yekan[d1] + " و ";
-      s = s.substring(0, s.length - 3);
-    }
-    return s;
-  }
-
-  if (number < 0) return "منفی " + _numberToPersianWords(number.abs());
-  if (number == 0) return "";
-  
-  String result = "";
-  for (int i = 0; number > 0; i++) {
-    int temp = number % 1000;
-    if (temp != 0) {
-      result = convertTo3Digits(temp) + " " + basex[i] + " و " + result;
-    }
-    number = (number / 1000).floor();
-  }
-  return result.substring(0, result.length - 3);
-}
-
-class Category {
-  int id;
+// =================================================================
+// 1. MODELS & DATA SERVICE
+// =================================================================
+class InventoryItem {
+  String id;
   String name;
-  int iconCodePoint;
-
-  Category({required this.id, required this.name, required this.iconCodePoint});
-
-  factory Category.fromJson(Map<String, dynamic> json) => Category(
-        id: json['id'],
-        name: json['name'],
-        iconCodePoint: json['iconCodePoint'],
-      );
-
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'iconCodePoint': iconCodePoint};
-}
-
-class CatalogItem {
-  int id;
-  String name;
-  double price;
-  String unit;
-  int categoryId;
-
-  CatalogItem({required this.id, required this.name, required this.price, required this.unit, required this.categoryId});
-
-  factory CatalogItem.fromJson(Map<String, dynamic> json) => CatalogItem(
-        id: json['id'],
-        name: json['name'],
-        price: json['price'],
-        unit: json['unit'],
-        categoryId: json['categoryId'],
-      );
-
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'price': price, 'unit': unit, 'categoryId': categoryId};
-}
-
-class InvoiceItem extends CatalogItem {
-  int invoiceId;
   double quantity;
+  String unit;
 
-  InvoiceItem({
-    required int id,
-    required String name,
-    required double price,
-    required String unit,
-    required int categoryId,
-    required this.invoiceId,
-    this.quantity = 1.0,
-  }) : super(id: id, name: name, price: price, unit: unit, categoryId: categoryId);
-  
-  factory InvoiceItem.fromJson(Map<String, dynamic> json) => InvoiceItem(
+  InventoryItem({required this.id, required this.name, required this.quantity, required this.unit});
+
+  factory InventoryItem.fromJson(Map<String, dynamic> json) => InventoryItem(
         id: json['id'],
         name: json['name'],
-        price: json['price'],
-        unit: json['unit'],
-        categoryId: json['categoryId'],
-        invoiceId: json['invoiceId'],
         quantity: json['quantity'],
+        unit: json['unit'],
       );
 
-  @override
-  Map<String, dynamic> toJson() {
-    final map = super.toJson();
-    map['invoiceId'] = invoiceId;
-    map['quantity'] = quantity;
-    return map;
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'quantity': quantity, 'unit': unit};
+}
+
+class SalesCartItem {
+  final InventoryItem inventoryItem;
+  double quantityToSell;
+  SalesCartItem({required this.inventoryItem, required this.quantityToSell});
+}
+
+class InventoryService {
+  static const _key = 'inventory_items';
+
+  Future<List<InventoryItem>> loadItems() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? itemsString = prefs.getString(_key);
+      if (itemsString != null) {
+        final List<dynamic> itemsJson = jsonDecode(itemsString);
+        return itemsJson.map((json) => InventoryItem.fromJson(json)).toList();
+      }
+      return [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  Future<void> saveItems(List<InventoryItem> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    final String itemsString = jsonEncode(items.map((item) => item.toJson()).toList());
+    await prefs.setString(_key, itemsString);
   }
 }
 
-// --- Main Application ---
-void main() {
-  WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MyApp());
-}
+// =================================================================
+// 2. MAIN APP & THEME
+// =================================================================
+void main() => runApp(const InventoryApp());
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class InventoryApp extends StatelessWidget {
+  const InventoryApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final textTheme = GoogleFonts.vazirmatnTextTheme(Theme.of(context).textTheme);
     return MaterialApp(
-      title: 'فاکتور ساز ',
+      title: 'انباردار حرفه‌ای',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0891b2)),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.deepPurple,
+          primary: Colors.deepPurple,
+          secondary: Colors.cyan,
+          background: Colors.grey[50],
+        ),
         useMaterial3: true,
-        textTheme: textTheme,
-        scaffoldBackgroundColor: const Color(0xFFf0f9ff),
-        appBarTheme: AppBarTheme(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
+        scaffoldBackgroundColor: Colors.grey[50],
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.deepPurple,
           foregroundColor: Colors.white,
-          titleTextStyle: textTheme.headlineSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
+          elevation: 4,
+          centerTitle: true,
+        ),
+        cardTheme: CardTheme(
+          elevation: 2,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         ),
         inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: Colors.white.withOpacity(0.8),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-          contentPadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+          filled: true,
+          fillColor: Colors.white,
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
         ),
       ),
-      home: const Directionality(
-        textDirection: TextDirection.rtl,
-        child: HomeScreen(),
-      ),
       debugShowCheckedModeBanner: false,
+      home: const HomePage(),
     );
   }
 }
 
-// --- Home Screen with Tabs ---
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
-
+// =================================================================
+// 3. HOME PAGE (DASHBOARD)
+// =================================================================
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
-  late TabController _tabController;
-  List<Category> _categories = [];
-  List<CatalogItem> _catalogItems = [];
-  List<InvoiceItem> _invoiceItems = [];
-  final GlobalKey<AnimatedListState> _invoiceListKey = GlobalKey<AnimatedListState>();
+class _HomePageState extends State<HomePage> {
+  int _totalUniqueItems = 0;
+  double _totalQuantity = 0;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-    _loadData();
+    _loadStats();
   }
 
-  // --- Data Persistence ---
-  Future<void> _saveData() async {
-    final prefs = await SharedPreferences.getInstance();
-    List<String> categoriesJson = _categories.map((c) => jsonEncode(c.toJson())).toList();
-    List<String> catalogJson = _catalogItems.map((item) => jsonEncode(item.toJson())).toList();
-    List<String> invoiceJson = _invoiceItems.map((item) => jsonEncode(item.toJson())).toList();
-    await prefs.setStringList('categories_v7', categoriesJson);
-    await prefs.setStringList('catalogItems_v7', catalogJson);
-    await prefs.setStringList('invoiceItems_v7', invoiceJson);
-  }
-
-  Future<void> _loadData() async {
-    final prefs = await SharedPreferences.getInstance();
-    List<String>? categoriesJson = prefs.getStringList('categories_v7');
-    List<String>? catalogJson = prefs.getStringList('catalogItems_v7');
-    List<String>? invoiceJson = prefs.getStringList('invoiceItems_v7');
-
-    if (categoriesJson != null) _categories = categoriesJson.map((c) => Category.fromJson(jsonDecode(c))).toList();
-    if (catalogJson != null) _catalogItems = catalogJson.map((item) => CatalogItem.fromJson(jsonDecode(item))).toList();
-    if (invoiceJson != null) _invoiceItems = invoiceJson.map((item) => InvoiceItem.fromJson(jsonDecode(item))).toList();
-    
-    setState(() {});
-  }
-  
-  // --- Core Logic ---
-  void _addCategory(String name, int iconCodePoint) {
-    setState(() {
-      _categories.add(Category(id: DateTime.now().millisecondsSinceEpoch, name: name, iconCodePoint: iconCodePoint));
-    });
-    _saveData();
-  }
-
-  void _deleteCategory(int id) {
-    setState(() {
-      _categories.removeWhere((c) => c.id == id);
-      _catalogItems.removeWhere((item) => item.categoryId == id);
-    });
-    _saveData();
-  }
-
-  void _addToCatalog(String name, double price, String unit, int categoryId) {
-    setState(() {
-      _catalogItems.add(CatalogItem(id: DateTime.now().millisecondsSinceEpoch, name: name, price: price, unit: unit, categoryId: categoryId));
-    });
-    _saveData();
-  }
-
-  void _deleteFromCatalog(int id) {
-    setState(() {
-      _catalogItems.removeWhere((item) => item.id == id);
-    });
-    _saveData();
-  }
-
-  void _addToInvoice(CatalogItem catalogItem) {
-    setState(() {
-      final existingItemIndex = _invoiceItems.indexWhere((item) => item.id == catalogItem.id);
-      if (existingItemIndex != -1) {
-        _invoiceItems[existingItemIndex].quantity++;
-      } else {
-        _invoiceItems.insert(0, InvoiceItem(
-          id: catalogItem.id,
-          name: catalogItem.name,
-          price: catalogItem.price,
-          unit: catalogItem.unit,
-          categoryId: catalogItem.categoryId,
-          invoiceId: DateTime.now().millisecondsSinceEpoch,
-        ));
-        if (_invoiceListKey.currentState != null) {
-          _invoiceListKey.currentState!.insertItem(0, duration: const Duration(milliseconds: 500));
-        }
-      }
-    });
-    _saveData();
-  }
-
-  void _removeFromInvoice(int index) {
-    final removedItem = _invoiceItems.removeAt(index);
-    _invoiceListKey.currentState!.removeItem(
-      index,
-      (context, animation) => SizeTransition(
-        sizeFactor: animation,
-        child: InvoiceItemCard(item: removedItem, onUpdate: (double quantity) {}, onRemove: (){}),
-      ),
-      duration: const Duration(milliseconds: 300),
-    );
-    setState(() {});
-    _saveData();
-  }
-
-  void _updateInvoiceItem(int invoiceId, double quantity) {
-     final itemIndex = _invoiceItems.indexWhere((item) => item.invoiceId == invoiceId);
-    if (itemIndex != -1) {
+  Future<void> _loadStats() async {
+    final items = await InventoryService().loadItems();
+    if (mounted) {
       setState(() {
-        _invoiceItems[itemIndex].quantity = quantity;
+        _totalUniqueItems = items.length;
+        _totalQuantity = items.fold(0, (sum, item) => sum + item.quantity);
       });
     }
-    _saveData();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Color(0xFF0e7490), Color(0xFF06b6d4), Color(0xFF67e8f9)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: AppBar(
-          title: const Text('پرده فروشی بهاران'),
-          bottom: TabBar(
-            controller: _tabController,
-            indicatorColor: Colors.white,
-            indicatorWeight: 3,
-            labelStyle: const TextStyle(fontFamily: 'Vazirmatn', fontWeight: FontWeight.bold, fontSize: 16),
-            unselectedLabelColor: Colors.white70,
-            labelColor: Colors.white,
-            tabs: const [
-              Tab(text: 'فاکتور جاری', icon: Icon(Icons.receipt_long)),
-              Tab(text: 'کاتالوگ', icon: Icon(Icons.inventory_2)),
-            ],
-          ),
-        ),
-        body: TabBarView(
-          controller: _tabController,
-          children: [
-            InvoicePage(
-              invoiceItems: _invoiceItems,
-              listKey: _invoiceListKey,
-              onUpdate: _updateInvoiceItem,
-              onRemove: _removeFromInvoice,
-            ),
-            CategoryListPage(
-              categories: _categories,
-              catalogItems: _catalogItems,
-              onAddCategory: _addCategory,
-              onDeleteCategory: _deleteCategory,
-              onAddItem: _addToCatalog,
-              onDeleteItem: _deleteFromCatalog,
-              onAddToInvoice: _addToInvoice,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// --- Category List Page ---
-class CategoryListPage extends StatelessWidget {
-  final List<Category> categories;
-  final List<CatalogItem> catalogItems;
-  final Function(String, int) onAddCategory;
-  final Function(int) onDeleteCategory;
-  final Function(String, double, String, int) onAddItem;
-  final Function(int) onDeleteItem;
-  final Function(CatalogItem) onAddToInvoice;
-
-  const CategoryListPage({super.key, required this.categories, required this.catalogItems, required this.onAddCategory, required this.onDeleteCategory, required this.onAddItem, required this.onDeleteItem, required this.onAddToInvoice});
-
-  void _showAddCategoryDialog(BuildContext context) {
-    showDialog(context: context, builder: (ctx) => _AddCategoryDialog(onAdd: onAddCategory));
-  }
-
-  void _showDeleteCategoryDialog(BuildContext context, Category category) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('حذف پوشه'),
-        content: Text('آیا از حذف پوشه "${category.name}" و تمام آیتم‌های داخل آن مطمئن هستید؟'),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('لغو')),
-          ElevatedButton(
-            onPressed: () {
-              onDeleteCategory(category.id);
-              Navigator.of(ctx).pop();
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('حذف'),
-          ),
-        ],
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: categories.isEmpty
-          ? Center(child: Text('هیچ پوشه‌ای وجود ندارد. یک پوشه جدید بسازید.', style: TextStyle(color: Colors.white70, fontSize: 16)))
-          : GridView.builder(
-              padding: const EdgeInsets.all(16),
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 200,
-                childAspectRatio: 1,
-                crossAxisSpacing: 16,
-                mainAxisSpacing: 16,
-              ),
-              itemCount: categories.length,
-              itemBuilder: (ctx, index) {
-                final category = categories[index];
-                return InkWell(
-                  onTap: () {
-                    Navigator.of(context).push(MaterialPageRoute(
-                      builder: (ctx) => CatalogItemsPage(
-                        category: category,
-                        allItems: catalogItems,
-                        onAddItem: onAddItem,
-                        onDeleteItem: onDeleteItem,
-                        onAddToInvoice: onAddToInvoice,
-                      ),
-                    ));
-                  },
-                  onLongPress: () => _showDeleteCategoryDialog(context, category),
-                  borderRadius: BorderRadius.circular(20),
-                  child: GlassmorphicCard(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(IconData(category.iconCodePoint, fontFamily: 'MaterialIcons'), size: 56, color: Colors.white),
-                        const SizedBox(height: 12),
-                        Text(category.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.white)),
-                      ],
-                    ),
-                  ),
-                ).animate().slideY(delay: (index * 70).ms, duration: 400.ms, curve: Curves.easeOut);
-              },
+      body: Directionality(
+        textDirection: TextDirection.rtl,
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Colors.deepPurple.shade800, Colors.deepPurple.shade500],
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showAddCategoryDialog(context),
-        label: const Text('افزودن پوشه'),
-        icon: const Icon(Icons.create_new_folder_outlined),
-      ),
-    );
-  }
-}
-
-// --- Catalog Items Page (Inside a Category) ---
-class CatalogItemsPage extends StatefulWidget {
-  final Category category;
-  final List<CatalogItem> allItems;
-  final Function(String, double, String, int) onAddItem;
-  final Function(int) onDeleteItem;
-  final Function(CatalogItem) onAddToInvoice;
-
-  const CatalogItemsPage({super.key, required this.category, required this.allItems, required this.onAddItem, required this.onDeleteItem, required this.onAddToInvoice});
-
-  @override
-  State<CatalogItemsPage> createState() => _CatalogItemsPageState();
-}
-
-class _CatalogItemsPageState extends State<CatalogItemsPage> {
-  late List<CatalogItem> _itemsInCategory;
-
-  @override
-  void initState() {
-    super.initState();
-    _updateItemsList();
-  }
-  
-  void _updateItemsList() {
-    _itemsInCategory = widget.allItems.where((item) => item.categoryId == widget.category.id).toList();
-  }
-
-  void _showAddItemDialog(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => _AddItemSheet(onAdd: (name, price, unit) {
-        widget.onAddItem(name, price, unit, widget.category.id);
-        setState(() {
-          _updateItemsList();
-        });
-      }),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    _updateItemsList();
-    
-    return Container(
-       decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Color(0xFF0e7490), Color(0xFF06b6d4), Color(0xFF67e8f9)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: AppBar(title: Text(widget.category.name)),
-        body: _itemsInCategory.isEmpty
-            ? Center(child: Text('این پوشه خالی است. یک آیتم جدید اضافه کنید.', style: TextStyle(color: Colors.white70, fontSize: 16)))
-            : GridView.builder(
-                padding: const EdgeInsets.all(12),
-                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: 220,
-                  childAspectRatio: 1,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
+          ),
+          child: SafeArea(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const CircleAvatar(
+                        radius: 30,
+                        backgroundColor: Colors.white,
+                        child: Icon(Icons.storefront_rounded, size: 30, color: Colors.deepPurple),
+                      ),
+                      const SizedBox(height: 16),
+                      Text('انباردار حرفه‌ای',
+                          style: Theme.of(context)
+                              .textTheme
+                              .headlineMedium
+                              ?.copyWith(fontWeight: FontWeight.bold, color: Colors.white)),
+                      Text('کسب و کار خود را هوشمندانه مدیریت کنید',
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.white70)),
+                    ],
+                  ),
                 ),
-                itemCount: _itemsInCategory.length,
-                itemBuilder: (ctx, index) {
-                  final item = _itemsInCategory[index];
-                  return InkWell(
-                    onTap: () {
-                      widget.onAddToInvoice(item);
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${item.name} به فاکتور اضافه شد'), duration: const Duration(seconds: 1), backgroundColor: Colors.green, behavior: SnackBarBehavior.floating, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))));
-                    },
-                    borderRadius: BorderRadius.circular(20),
-                    child: GlassmorphicCard(
-                      child: Stack(
+                Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: const BorderRadius.only(topLeft: Radius.circular(30), topRight: Radius.circular(30)),
+                    ),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
                         children: [
-                          Padding(
-                            padding: const EdgeInsets.all(12.0),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(_getIconForUnit(item.unit), size: 48, color: Colors.white70),
-                                const SizedBox(height: 12),
-                                Text(item.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16), textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
-                                const SizedBox(height: 4),
-                                Text('${item.price.toStringAsFixed(0)} تومان', style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 14)),
-                              ],
-                            ),
+                          _buildStatsCard(),
+                          const SizedBox(height: 24),
+                          _buildDashboardActionCard(
+                            context,
+                            icon: Icons.point_of_sale_rounded,
+                            label: 'ثبت فروش جدید',
+                            description: 'ثبت فاکتور و کسر از موجودی',
+                            color: Colors.cyan,
+                            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SalesPage()))
+                                .then((_) => _loadStats()),
                           ),
-                          Positioned(
-                            top: 4,
-                            left: 4,
-                            child: IconButton(
-                              icon: const Icon(Icons.delete_forever, color: Colors.redAccent),
-                              onPressed: () {
-                                widget.onDeleteItem(item.id);
-                                setState(() {
-                                  _updateItemsList();
-                                });
-                              },
-                              tooltip: 'حذف از کاتالوگ',
-                            ),
+                          const SizedBox(height: 16),
+                          _buildDashboardActionCard(
+                            context,
+                            icon: Icons.inventory_2_rounded,
+                            label: 'مدیریت انبار',
+                            description: 'افزودن، ویرایش و حذف کالاها',
+                            color: Colors.orange,
+                            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const InventoryListPage()))
+                                .then((_) => _loadStats()),
                           ),
                         ],
                       ),
                     ),
-                  );
-                },
-              ),
-        floatingActionButton: FloatingActionButton.extended(
-          onPressed: () => _showAddItemDialog(context),
-          label: const Text('افزودن آیتم'),
-          icon: const Icon(Icons.add),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
   }
-}
 
-// --- Invoice Page Widget ---
-class InvoicePage extends StatefulWidget {
-  final List<InvoiceItem> invoiceItems;
-  final GlobalKey<AnimatedListState> listKey;
-  final Function(int, double) onUpdate;
-  final Function(int) onRemove;
-
-  const InvoicePage({super.key, required this.invoiceItems, required this.listKey, required this.onUpdate, required this.onRemove});
-
-  @override
-  State<InvoicePage> createState() => _InvoicePageState();
-}
-
-class _InvoicePageState extends State<InvoicePage> {
-  final _discountController = TextEditingController(text: '0');
-  final _taxController = TextEditingController(text: '0');
-
-  Future<void> _generatePdf() async {
-      final doc = pw.Document();
-      final font = await PdfGoogleFonts.vazirmatnRegular();
-      final boldFont = await PdfGoogleFonts.vazirmatnBold();
-
-      final subtotal = widget.invoiceItems.fold(0.0, (sum, item) => sum + (item.price * item.quantity));
-      final discountPercent = double.tryParse(_persianToEnglishNumbers(_discountController.text)) ?? 0;
-      final taxPercent = double.tryParse(_persianToEnglishNumbers(_taxController.text)) ?? 0;
-      final discountAmount = subtotal * (discountPercent / 100);
-      final grandTotal = subtotal - discountAmount + ((subtotal - discountAmount) * (taxPercent / 100));
-
-      doc.addPage(
-        pw.Page(
-          theme: pw.ThemeData.withFont(base: font, bold: boldFont),
-          pageFormat: PdfPageFormat.a4,
-          build: (context) {
-            return pw.Directionality(
-              textDirection: pw.TextDirection.rtl,
-              child: pw.Column(
-                children: [
-                  pw.Header(
-                    level: 0,
-                    child: pw.Row(
-                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                      children: [
-                        pw.Text('فاکتور فروش', style: pw.TextStyle(font: boldFont, fontSize: 24)),
-                        pw.Text('فروشگاه پرده بهاران'),
-                      ],
-                    ),
-                  ),
-                  pw.Table.fromTextArray(
-                    headerStyle: pw.TextStyle(font: boldFont, color: PdfColors.white),
-                    headerDecoration: const pw.BoxDecoration(color: PdfColors.teal),
-                    cellAlignment: pw.Alignment.center,
-                    headers: ['شرح', 'قیمت', 'تعداد', 'جمع کل'],
-                    data: widget.invoiceItems.map((item) => [
-                      item.name,
-                      item.price.toStringAsFixed(0),
-                      item.quantity.toString(),
-                      (item.price * item.quantity).toStringAsFixed(0),
-                    ]).toList(),
-                  ),
-                  pw.Spacer(),
-                  pw.Column(
-                    children: [
-                      pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('جمع جزء:'), pw.Text(subtotal.toStringAsFixed(0))]),
-                      pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('تخفیف:'), pw.Text(discountAmount.toStringAsFixed(0))]),
-                      pw.Divider(),
-                      pw.DefaultTextStyle(style: pw.TextStyle(font: boldFont, fontSize: 18), child: 
-                        pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('مبلغ نهایی:'), pw.Text(grandTotal.toStringAsFixed(0))])
-                      ),
-                      pw.SizedBox(height: 10),
-                      pw.Text('به حروف: ${_numberToPersianWords(grandTotal.toInt())} تومان', style: pw.TextStyle(font: font, fontSize: 12)),
-                    ]
-                  )
-                ],
-              ),
-            );
-          },
-        ),
-      );
-      await Printing.layoutPdf(onLayout: (format) => doc.save());
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    double subtotal = widget.invoiceItems.fold(0.0, (sum, item) => sum + (item.price * item.quantity));
-    double discount = subtotal * (double.tryParse(_persianToEnglishNumbers(_discountController.text)) ?? 0) / 100;
-    double tax = (subtotal - discount) * (double.tryParse(_persianToEnglishNumbers(_taxController.text)) ?? 0) / 100;
-    double total = subtotal - discount + tax;
-
-    return Column(
-      children: [
-        Expanded(
-          child: widget.invoiceItems.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.add_shopping_cart, size: 80, color: Colors.white.withOpacity(0.5)),
-                      const SizedBox(height: 16),
-                      Text('فاکتور خالی است!', style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.white70)),
-                      const Text('برای شروع، از بخش کاتالوگ آیتمی را اضافه کنید', style: TextStyle(color: Colors.white70)),
-                    ],
-                  ),
-                ).animate().fade(duration: 300.ms)
-              : AnimatedList(
-                  key: widget.listKey,
-                  initialItemCount: widget.invoiceItems.length,
-                  padding: const EdgeInsets.all(12),
-                  itemBuilder: (context, index, animation) {
-                    final item = widget.invoiceItems[index];
-                    return SizeTransition(
-                      sizeFactor: animation,
-                      child: InvoiceItemCard(
-                        item: item,
-                        onUpdate: (quantity) => widget.onUpdate(item.invoiceId, quantity),
-                        onRemove: () => widget.onRemove(index),
-                      ),
-                    );
-                  },
-                ),
-        ),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10, spreadRadius: 5),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(child: TextField(controller: _discountController, decoration: const InputDecoration(labelText: 'تخفیف ٪', prefixIcon: Icon(Icons.percent)), keyboardType: TextInputType.number, onChanged: (_) => setState(() {}))),
-                  const SizedBox(width: 10),
-                  Expanded(child: TextField(controller: _taxController, decoration: const InputDecoration(labelText: 'مالیات ٪', prefixIcon: Icon(Icons.percent)), keyboardType: TextInputType.number, onChanged: (_) => setState(() {}))),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('جمع کل:', style: TextStyle(fontSize: 18)), Text('${total.toStringAsFixed(0)} تومان', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18))]),
-              Padding(
-                padding: const EdgeInsets.only(top: 8.0),
-                child: Text('به حروف: ${_numberToPersianWords(total.toInt())} تومان', style: TextStyle(color: Colors.grey[600])),
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: widget.invoiceItems.isEmpty ? null : _generatePdf,
-                icon: const Icon(Icons.print),
-                label: const Text('چاپ فاکتور'),
-                style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
-              ),
-            ],
-          ),
-        ),
-      ],
-    ).animate().fadeIn(duration: 500.ms);
-  }
-}
-
-class InvoiceItemCard extends StatelessWidget {
-  final InvoiceItem item;
-  final Function(double) onUpdate;
-  final VoidCallback onRemove;
-
-  const InvoiceItemCard({super.key, required this.item, required this.onUpdate, required this.onRemove});
-
-  @override
-  Widget build(BuildContext context) {
-    final quantityController = TextEditingController(text: item.quantity.toString());
-    quantityController.selection = TextSelection.fromPosition(TextPosition(offset: quantityController.text.length));
-
+  Widget _buildStatsCard() {
     return Card(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      elevation: 0,
+      color: Colors.deepPurple.withOpacity(0.1),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 12.0),
+        padding: const EdgeInsets.all(20.0),
         child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
-            CircleAvatar(
-              radius: 24,
-              backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-              child: Icon(_getIconForUnit(item.unit), color: Theme.of(context).colorScheme.primary),
+            Column(
+              children: [
+                Text(_totalUniqueItems.toString(), style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold, color: Colors.deepPurple)),
+                Text('نوع کالا', style: Theme.of(context).textTheme.bodyMedium),
+              ],
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  Text('${item.price.toStringAsFixed(0)} تومان', style: TextStyle(color: Colors.grey[700], fontSize: 14)),
-                ],
-              ),
+            Container(width: 1, height: 40, color: Colors.deepPurple.withOpacity(0.2)),
+            Column(
+              children: [
+                Text(_totalQuantity.toStringAsFixed(1), style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold, color: Colors.deepPurple)),
+                Text('موجودی کل', style: Theme.of(context).textTheme.bodyMedium),
+              ],
             ),
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(30),
-              ),
-              child: Row(
-                children: [
-                  IconButton(icon: const Icon(Icons.remove), onPressed: () => onUpdate((item.quantity - 0.01).clamp(0.01, 9999.0))),
-                  SizedBox(
-                    width: 50,
-                    child: TextField(
-                      controller: quantityController,
-                      textAlign: TextAlign.center,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.zero),
-                      onChanged: (value) {
-                        final parsedValue = double.tryParse(_persianToEnglishNumbers(value)) ?? item.quantity;
-                        onUpdate(parsedValue);
-                      },
-                    ),
-                  ),
-                  IconButton(icon: const Icon(Icons.add), onPressed: () => onUpdate(item.quantity + 0.01)),
-                ],
-              ),
-            ),
-            IconButton(icon: Icon(Icons.delete_outline, color: Colors.red[700]), onPressed: onRemove),
           ],
         ),
       ),
     );
   }
+
+  Widget _buildDashboardActionCard(BuildContext context,
+      {required IconData icon, required String label, required String description, required Color color, required VoidCallback onTap}) {
+    return Card(
+      elevation: 4,
+      shadowColor: color.withOpacity(0.3),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: Row(children: [
+            CircleAvatar(
+              radius: 25,
+              backgroundColor: color.withOpacity(0.1),
+              child: Icon(icon, size: 28, color: color),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(label, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+                Text(description, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey[600])),
+              ]),
+            ),
+            const Icon(Icons.arrow_forward_ios_rounded, color: Colors.grey),
+          ]),
+        ),
+      ),
+    );
+  }
 }
 
-class _AddItemSheet extends StatefulWidget {
-  final Function(String name, double price, String unit) onAdd;
+// =================================================================
+// 4. SALES PAGE
+// =================================================================
+class SalesPage extends StatefulWidget {
+  const SalesPage({super.key});
+  @override
+  State<SalesPage> createState() => _SalesPageState();
+}
 
-  const _AddItemSheet({required this.onAdd});
+class _SalesPageState extends State<SalesPage> {
+  final InventoryService _service = InventoryService();
+  List<SalesCartItem> _salesCart = [];
+
+  Future<void> _addItemToCart() async {
+    List<InventoryItem> availableItems = await _service.loadItems();
+    availableItems.removeWhere((item) => item.quantity <= 0);
+    if (!mounted) return;
+    InventoryItem? selectedItem = await showModalBottomSheet(
+        context: context,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        builder: (context) => _SelectItemSheet(items: availableItems));
+    if (selectedItem != null) {
+      if (!mounted) return;
+      _promptForQuantity(selectedItem);
+    }
+  }
+
+  void _promptForQuantity(InventoryItem item) {
+    final quantityController = TextEditingController();
+    showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Text('مقدار فروش: ${item.name}'),
+            content: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text('موجودی انبار: ${item.quantity} ${item.unit}'),
+              const SizedBox(height: 16),
+              TextField(
+                  controller: quantityController,
+                  autofocus: true,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(labelText: 'تعداد/مقدار'))
+            ]),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('انصراف')),
+              FilledButton(
+                  onPressed: () {
+                    final qty = double.tryParse(quantityController.text);
+                    if (qty != null && qty > 0 && qty <= item.quantity) {
+                      setState(() {
+                        var existingIndex =
+                            _salesCart.indexWhere((cartItem) => cartItem.inventoryItem.id == item.id);
+                        if (existingIndex != -1) {
+                          _salesCart[existingIndex].quantityToSell = qty;
+                        } else {
+                          _salesCart.add(SalesCartItem(inventoryItem: item, quantityToSell: qty));
+                        }
+                      });
+                      Navigator.pop(context);
+                    } else {
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          content: Text('مقدار وارد شده نامعتبر است.'), backgroundColor: Colors.red));
+                    }
+                  },
+                  child: const Text('افزودن به لیست'))
+            ]));
+  }
+
+  Future<void> _finalizeSale() async {
+    if (_salesCart.isEmpty) return;
+    HapticFeedback.heavyImpact();
+    List<InventoryItem> allItems = await _service.loadItems();
+    for (var cartItem in _salesCart) {
+      var itemInStock = allItems.firstWhere((item) => item.id == cartItem.inventoryItem.id);
+      itemInStock.quantity -= cartItem.quantityToSell;
+    }
+    await _service.saveItems(allItems);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('فروش با موفقیت نهایی شد.'), backgroundColor: Colors.green));
+    setState(() => _salesCart.clear());
+  }
 
   @override
-  State<_AddItemSheet> createState() => __AddItemSheetState();
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('ثبت فاکتور فروش')),
+      body: Directionality(
+          textDirection: TextDirection.rtl,
+          child: Column(children: [
+            Expanded(
+                child: _salesCart.isEmpty
+                    ? _buildEmptyState('سبد فروش خالی است', Icons.shopping_cart_outlined)
+                    : ListView.builder(
+                        padding: const EdgeInsets.only(top: 5, bottom: 100),
+                        itemCount: _salesCart.length,
+                        itemBuilder: (context, index) {
+                          final cartItem = _salesCart[index];
+                          return Card(
+                              child: ListTile(
+                                  leading: const Icon(Icons.shopping_basket_outlined, color: Colors.cyan),
+                                  title: Text(cartItem.inventoryItem.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                  subtitle: Text('تعداد فروش: ${cartItem.quantityToSell} ${cartItem.inventoryItem.unit}'),
+                                  trailing: IconButton(
+                                      icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                                      onPressed: () => setState(() => _salesCart.removeAt(index)))));
+                        })),
+            if (_salesCart.isNotEmpty)
+              Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                          onPressed: _finalizeSale,
+                          icon: const Icon(Icons.check_circle_outline),
+                          label: const Text('نهایی کردن فروش'),
+                          style: FilledButton.styleFrom(backgroundColor: Colors.green))))
+          ])),
+      floatingActionButton: FloatingActionButton.extended(
+          onPressed: _addItemToCart,
+          icon: const Icon(Icons.add_shopping_cart_rounded),
+          label: const Text('افزودن کالا'),
+          backgroundColor: Colors.cyan,
+          foregroundColor: Colors.white),
+    );
+  }
+
+  Widget _buildEmptyState(String message, IconData icon) {
+    return Center(
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+      Icon(icon, size: 80, color: Colors.grey[300]),
+      const SizedBox(height: 16),
+      Text(message, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.grey))
+    ]));
+  }
 }
 
-class __AddItemSheetState extends State<_AddItemSheet> {
-  final _nameController = TextEditingController();
-  final _priceController = TextEditingController();
-  String _selectedUnit = 'متر';
+class _SelectItemSheet extends StatelessWidget {
+  final List<InventoryItem> items;
+  const _SelectItemSheet({required this.items});
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+        textDirection: TextDirection.rtl,
+        child: Column(children: [
+          Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Text('یک کالا برای فروش انتخاب کنید', style: Theme.of(context).textTheme.titleLarge)),
+          Expanded(
+              child: items.isEmpty
+                  ? const Center(child: Text('کالایی برای فروش در انبار موجود نیست.'))
+                  : ListView.builder(
+                      itemCount: items.length,
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        return ListTile(
+                            title: Text(item.name),
+                            subtitle: Text('موجودی: ${item.quantity} ${item.unit}'),
+                            onTap: () => Navigator.pop(context, item));
+                      }))
+        ]));
+  }
+}
+
+// =================================================================
+// 5. INVENTORY MANAGEMENT PAGES
+// =================================================================
+class InventoryListPage extends StatefulWidget {
+  const InventoryListPage({super.key});
+  @override
+  State<InventoryListPage> createState() => _InventoryListPageState();
+}
+
+class _InventoryListPageState extends State<InventoryListPage> {
+  final InventoryService _service = InventoryService();
+  final GlobalKey<AnimatedListState> _listKey = GlobalKey<AnimatedListState>();
+  List<InventoryItem> _items = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    setState(() => _isLoading = true);
+    var loadedItems = await _service.loadItems();
+    if (mounted) {
+      setState(() {
+        _items = loadedItems;
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _navigateToAddEditPage({InventoryItem? item, int? index}) async {
+    final result = await Navigator.push<InventoryItem>(
+        context, MaterialPageRoute(builder: (context) => AddEditItemPage(item: item)));
+    if (result != null) {
+      setState(() {
+        if (item != null && index != null) {
+          // Edit
+          _items[index] = result;
+        } else {
+          // Add
+          _items.insert(0, result);
+          _listKey.currentState?.insertItem(0, duration: const Duration(milliseconds: 400));
+        }
+      });
+      _service.saveItems(_items);
+    }
+  }
+
+  void _deleteItem(InventoryItem item, int index) {
+    final removedItem = _items.removeAt(index);
+    _listKey.currentState?.removeItem(index, (context, animation) => _buildRemovedItem(removedItem, animation),
+        duration: const Duration(milliseconds: 400));
+    _service.saveItems(_items);
+    HapticFeedback.mediumImpact();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${item.name} حذف شد.'), backgroundColor: Colors.redAccent));
+  }
+
+  Widget _buildRemovedItem(InventoryItem item, Animation<double> animation) {
+    return SizeTransition(
+        sizeFactor: animation, child: Opacity(opacity: 0, child: Card(child: ListTile(title: Text(item.name)))));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('مدیریت انبار')),
+      body: Directionality(
+        textDirection: TextDirection.rtl,
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : _items.isEmpty
+                ? _buildEmptyState('انباری خالی است', Icons.inventory_2_outlined)
+                : RefreshIndicator(
+                    onRefresh: _loadData,
+                    child: AnimatedList(
+                        key: _listKey,
+                        initialItemCount: _items.length,
+                        padding: const EdgeInsets.only(top: 5, bottom: 80),
+                        itemBuilder: (context, index, animation) {
+                          final item = _items[index];
+                          return SizeTransition(
+                              sizeFactor: animation,
+                              child: Slidable(
+                                  key: ValueKey(item.id),
+                                  startActionPane: ActionPane(motion: const DrawerMotion(), children: [
+                                    SlidableAction(
+                                        onPressed: (_) => _deleteItem(item, index),
+                                        backgroundColor: Colors.red,
+                                        foregroundColor: Colors.white,
+                                        icon: Icons.delete_sweep_outlined,
+                                        label: 'حذف'),
+                                    SlidableAction(
+                                        onPressed: (_) => _navigateToAddEditPage(item: item, index: index),
+                                        backgroundColor: Colors.blue,
+                                        foregroundColor: Colors.white,
+                                        icon: Icons.edit_outlined,
+                                        label: 'ویرایش')
+                                  ]),
+                                  child: Card(
+                                      child: ListTile(
+                                          leading: CircleAvatar(
+                                              backgroundColor: Colors.deepPurple.withOpacity(0.1),
+                                              foregroundColor: Colors.deepPurple,
+                                              child: const Icon(Icons.widgets_outlined)),
+                                          title: Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                          subtitle: Text('موجودی: ${item.quantity} ${item.unit}',
+                                              style: TextStyle(
+                                                  color: item.quantity < 5 ? Colors.orange.shade700 : null,
+                                                  fontWeight: item.quantity < 5 ? FontWeight.bold : null))))));
+                        })),
+      ),
+      floatingActionButton: FloatingActionButton(
+          onPressed: () => _navigateToAddEditPage(),
+          tooltip: 'افزودن کالای جدید',
+          child: const Icon(Icons.add_rounded)),
+    );
+  }
+
+  Widget _buildEmptyState(String message, IconData icon) {
+    return Center(
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+      Icon(icon, size: 80, color: Colors.grey[300]),
+      const SizedBox(height: 16),
+      Text(message, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.grey)),
+      const SizedBox(height: 20),
+      FilledButton.icon(
+          onPressed: () => _navigateToAddEditPage(),
+          icon: const Icon(Icons.add_rounded),
+          label: const Text('افزودن اولین کالا'))
+    ]));
+  }
+}
+
+class AddEditItemPage extends StatefulWidget {
+  final InventoryItem? item;
+  const AddEditItemPage({super.key, this.item});
+  @override
+  State<AddEditItemPage> createState() => _AddEditItemPageState();
+}
+
+class _AddEditItemPageState extends State<AddEditItemPage> {
+  final _formKey = GlobalKey<FormState>();
+  late TextEditingController _nameController;
+  late TextEditingController _quantityController;
+  late String _selectedUnit;
+  late bool _isEditing;
+
+  @override
+  void initState() {
+    super.initState();
+    _isEditing = widget.item != null;
+    _nameController = TextEditingController(text: widget.item?.name ?? '');
+    _quantityController = TextEditingController(text: widget.item?.quantity.toString() ?? '');
+    _selectedUnit = widget.item?.unit ?? 'عدد';
+  }
 
   @override
   void dispose() {
     _nameController.dispose();
-    _priceController.dispose();
+    _quantityController.dispose();
     super.dispose();
   }
 
-  void _submit() {
-    final name = _nameController.text.trim();
-    final price = double.tryParse(_persianToEnglishNumbers(_priceController.text)) ?? 0;
-    if (name.isNotEmpty && price > 0) {
-      widget.onAdd(name, price, _selectedUnit);
-      Navigator.of(context).pop();
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('لطفاً نام و قیمت معتبر وارد کنید.'), backgroundColor: Colors.red),
+  void _saveForm() {
+    if (_formKey.currentState!.validate()) {
+      HapticFeedback.lightImpact();
+      final newItem = InventoryItem(
+        id: _isEditing ? widget.item!.id : DateTime.now().millisecondsSinceEpoch.toString(),
+        name: _nameController.text,
+        quantity: double.parse(_quantityController.text),
+        unit: _selectedUnit,
       );
+      Navigator.pop(context, newItem);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom, left: 16, right: 16, top: 16),
-      decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('افزودن آیتم جدید', style: Theme.of(context).textTheme.headlineSmall),
-          const SizedBox(height: 24),
-          TextField(controller: _nameController, decoration: const InputDecoration(labelText: 'نام آیتم'), textInputAction: TextInputAction.next),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(child: TextField(controller: _priceController, decoration: const InputDecoration(labelText: 'قیمت'), keyboardType: const TextInputType.numberWithOptions(decimal: true), onSubmitted: (_) => _submit())),
-              const SizedBox(width: 16),
-              DropdownButton<String>(
-                value: _selectedUnit,
-                items: ['متر', 'عدد', 'خدمات', 'متر مربع', 'قواره'].map((String value) {
-                  return DropdownMenuItem<String>(value: value, child: Text(value));
-                }).toList(),
-                onChanged: (newValue) => setState(() => _selectedUnit = newValue!),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          ElevatedButton.icon(
-            icon: const Icon(Icons.save),
-            label: const Text('ذخیره آیتم'),
-            style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
-            onPressed: _submit,
-          ),
-          const SizedBox(height: 20),
-        ],
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_isEditing ? 'ویرایش کالا' : 'افزودن کالا'),
+        actions: [IconButton(icon: const Icon(Icons.check_rounded), onPressed: _saveForm, tooltip: 'ذخیره')],
       ),
+      body: Directionality(
+          textDirection: TextDirection.rtl,
+          child: Form(
+              key: _formKey,
+              child: ListView(padding: const EdgeInsets.all(16.0), children: [
+                TextFormField(
+                    controller: _nameController,
+                    decoration: const InputDecoration(labelText: 'نام کالا', prefixIcon: Icon(Icons.label_outline_rounded)),
+                    validator: (value) => value == null || value.isEmpty ? 'نام کالا نمی‌تواند خالی باشد' : null),
+                const SizedBox(height: 16),
+                TextFormField(
+                    controller: _quantityController,
+                    decoration: const InputDecoration(labelText: 'مقدار', prefixIcon: Icon(Icons.format_list_numbered_rounded)),
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    validator: (value) =>
+                        (value == null || value.isEmpty || double.tryParse(value) == null) ? 'مقدار نامعتبر است' : null),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                    value: _selectedUnit,
+                    decoration: const InputDecoration(labelText: 'واحد', prefixIcon: Icon(Icons.straighten_rounded)),
+                    items: ['عدد', 'متر'].map((unit) => DropdownMenuItem(value: unit, child: Text(unit))).toList(),
+                    onChanged: (value) {
+                      if (value != null) setState(() => _selectedUnit = value);
+                    }),
+                const SizedBox(height: 32),
+                FilledButton(onPressed: _saveForm, child: const Text('ذخیره تغییرات'))
+              ]))),
     );
   }
 }
-
-class _AddCategoryDialog extends StatefulWidget {
-  final Function(String name, int iconCodePoint) onAdd;
-  const _AddCategoryDialog({required this.onAdd});
-
-  @override
-  State<_AddCategoryDialog> createState() => _AddCategoryDialogState();
-}
-
-class _AddCategoryDialogState extends State<_AddCategoryDialog> {
-  final _nameController = TextEditingController();
-  IconData _selectedIcon = Icons.category;
-
-  final List<IconData> _icons = [
-    Icons.category, Icons.style, Icons.build, Icons.content_cut,
-    Icons.home, Icons.curtains, Icons.blinds, Icons.roller_shades
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('ایجاد پوشه جدید'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(controller: _nameController, decoration: const InputDecoration(labelText: 'نام پوشه')),
-          const SizedBox(height: 20),
-          const Text('انتخاب آیکون:'),
-          Wrap(
-            spacing: 8,
-            children: _icons.map((icon) => ChoiceChip(
-              label: Icon(icon),
-              selected: _selectedIcon == icon,
-              onSelected: (selected) => setState(() => _selectedIcon = icon),
-            )).toList(),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('لغو')),
-        ElevatedButton(
-          onPressed: () {
-            if (_nameController.text.isNotEmpty) {
-              widget.onAdd(_nameController.text, _selectedIcon.codePoint);
-              Navigator.of(context).pop();
-            }
-          },
-          child: const Text('ایجاد'),
-        ),
-      ],
-    );
-  }
-}
-
-// A custom widget for the glassmorphic effect
-class GlassmorphicCard extends StatelessWidget {
-  final Widget child;
-  const GlassmorphicCard({super.key, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(20),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                Colors.white.withOpacity(0.2),
-                Colors.white.withOpacity(0.1),
-              ],
-              begin: AlignmentDirectional.topStart,
-              end: AlignmentDirectional.bottomEnd,
-            ),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.3),
-              width: 1.5,
-            ),
-          ),
-          child: child,
-        ),
-      ),
-    );
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
