@@ -1,8 +1,15 @@
 import 'dart:convert';
+import 'dart:ui' as ui;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:image_gallery_saver/image_gallery_saver.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter/rendering.dart';
 
 // =================================================================
 // 1. MODELS & DATA SERVICE
@@ -12,17 +19,31 @@ class InventoryItem {
   String name;
   double quantity;
   String unit;
+  String code;
 
-  InventoryItem({required this.id, required this.name, required this.quantity, required this.unit});
+  InventoryItem({
+    required this.id,
+    required this.name,
+    required this.quantity,
+    required this.unit,
+    required this.code,
+  });
 
   factory InventoryItem.fromJson(Map<String, dynamic> json) => InventoryItem(
         id: json['id'],
         name: json['name'],
-        quantity: json['quantity'],
+        quantity: (json['quantity'] as num).toDouble(),
         unit: json['unit'],
+        code: json['code'],
       );
 
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'quantity': quantity, 'unit': unit};
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'quantity': quantity,
+        'unit': unit,
+        'code': code,
+      };
 }
 
 class SalesCartItem {
@@ -40,7 +61,7 @@ class InventoryService {
       final String? itemsString = prefs.getString(_key);
       if (itemsString != null) {
         final List<dynamic> itemsJson = jsonDecode(itemsString);
-        return itemsJson.map((json) => InventoryItem.fromJson(json)).toList();
+        return itemsJson.map((e) => InventoryItem.fromJson(e)).toList();
       }
       return [];
     } catch (e) {
@@ -50,7 +71,7 @@ class InventoryService {
 
   Future<void> saveItems(List<InventoryItem> items) async {
     final prefs = await SharedPreferences.getInstance();
-    final String itemsString = jsonEncode(items.map((item) => item.toJson()).toList());
+    final String itemsString = jsonEncode(items.map((e) => e.toJson()).toList());
     await prefs.setString(_key, itemsString);
   }
 }
@@ -129,7 +150,7 @@ class _HomePageState extends State<HomePage> {
     if (mounted) {
       setState(() {
         _totalUniqueItems = items.length;
-        _totalQuantity = items.fold(0, (sum, item) => sum + item.quantity);
+        _totalQuantity = items.fold(0.0, (sum, item) => sum + item.quantity);
       });
     }
   }
@@ -226,14 +247,16 @@ class _HomePageState extends State<HomePage> {
           children: [
             Column(
               children: [
-                Text(_totalUniqueItems.toString(), style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold, color: Colors.deepPurple)),
+                Text(_totalUniqueItems.toString(),
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold, color: Colors.deepPurple)),
                 Text('نوع کالا', style: Theme.of(context).textTheme.bodyMedium),
               ],
             ),
             Container(width: 1, height: 40, color: Colors.deepPurple.withOpacity(0.2)),
             Column(
               children: [
-                Text(_totalQuantity.toStringAsFixed(1), style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold, color: Colors.deepPurple)),
+                Text(_totalQuantity.toStringAsFixed(1),
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold, color: Colors.deepPurple)),
                 Text('موجودی کل', style: Theme.of(context).textTheme.bodyMedium),
               ],
             ),
@@ -243,8 +266,14 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildDashboardActionCard(BuildContext context,
-      {required IconData icon, required String label, required String description, required Color color, required VoidCallback onTap}) {
+  Widget _buildDashboardActionCard(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required String description,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
     return Card(
       elevation: 4,
       shadowColor: color.withOpacity(0.3),
@@ -286,76 +315,111 @@ class SalesPage extends StatefulWidget {
 class _SalesPageState extends State<SalesPage> {
   final InventoryService _service = InventoryService();
   List<SalesCartItem> _salesCart = [];
+  List<InventoryItem> _allItems = [];
 
-  Future<void> _addItemToCart() async {
-    List<InventoryItem> availableItems = await _service.loadItems();
-    availableItems.removeWhere((item) => item.quantity <= 0);
+  @override
+  void initState() {
+    super.initState();
+    _loadAllItems();
+  }
+
+  Future<void> _loadAllItems() async {
+    _allItems = await _service.loadItems();
+  }
+
+  Future<void> _addItemToCartManually() async {
+    List<InventoryItem> available = _allItems.where((i) => i.quantity > 0).toList();
     if (!mounted) return;
-    InventoryItem? selectedItem = await showModalBottomSheet(
+    final selected = await showModalBottomSheet<InventoryItem>(
         context: context,
         shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-        builder: (context) => _SelectItemSheet(items: availableItems));
-    if (selectedItem != null) {
-      if (!mounted) return;
-      _promptForQuantity(selectedItem);
-    }
+        builder: (_) => _SelectItemSheet(items: available));
+    if (selected != null) _promptForQuantity(selected);
   }
 
   void _promptForQuantity(InventoryItem item) {
-    final quantityController = TextEditingController();
+    final controller = TextEditingController();
     showDialog(
         context: context,
-        builder: (context) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: Text('مقدار فروش: ${item.name}'),
-            content: Column(mainAxisSize: MainAxisSize.min, children: [
-              Text('موجودی انبار: ${item.quantity} ${item.unit}'),
-              const SizedBox(height: 16),
-              TextField(
-                  controller: quantityController,
-                  autofocus: true,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(labelText: 'تعداد/مقدار'))
-            ]),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('انصراف')),
-              FilledButton(
-                  onPressed: () {
-                    final qty = double.tryParse(quantityController.text);
-                    if (qty != null && qty > 0 && qty <= item.quantity) {
-                      setState(() {
-                        var existingIndex =
-                            _salesCart.indexWhere((cartItem) => cartItem.inventoryItem.id == item.id);
-                        if (existingIndex != -1) {
-                          _salesCart[existingIndex].quantityToSell = qty;
-                        } else {
-                          _salesCart.add(SalesCartItem(inventoryItem: item, quantityToSell: qty));
-                        }
-                      });
-                      Navigator.pop(context);
-                    } else {
-                      if (!mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                          content: Text('مقدار وارد شده نامعتبر است.'), backgroundColor: Colors.red));
-                    }
-                  },
-                  child: const Text('افزودن به لیست'))
-            ]));
+        builder: (_) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: Text('مقدار فروش: ${item.name}'),
+              content: Column(mainAxisSize: MainAxisSize.min, children: [
+                Text('موجودی انبار: ${item.quantity} ${item.unit}'),
+                const SizedBox(height: 16),
+                TextField(
+                    controller: controller,
+                    autofocus: true,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: 'تعداد/مقدار')),
+              ]),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('انصراف')),
+                FilledButton(
+                    onPressed: () {
+                      final qty = double.tryParse(controller.text);
+                      if (qty != null && qty > 0 && qty <= item.quantity) {
+                        setState(() {
+                          final idx = _salesCart.indexWhere((c) => c.inventoryItem.id == item.id);
+                          if (idx != -1) {
+                            _salesCart[idx].quantityToSell = qty;
+                          } else {
+                            _salesCart.add(SalesCartItem(inventoryItem: item, quantityToSell: qty));
+                          }
+                        });
+                        Navigator.pop(context);
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('مقدار نامعتبر'), backgroundColor: Colors.red));
+                      }
+                    },
+                    child: const Text('افزودن به لیست'))
+              ],
+            ));
   }
 
   Future<void> _finalizeSale() async {
     if (_salesCart.isEmpty) return;
     HapticFeedback.heavyImpact();
-    List<InventoryItem> allItems = await _service.loadItems();
-    for (var cartItem in _salesCart) {
-      var itemInStock = allItems.firstWhere((item) => item.id == cartItem.inventoryItem.id);
-      itemInStock.quantity -= cartItem.quantityToSell;
+    final all = await _service.loadItems();
+    for (final c in _salesCart) {
+      final stock = all.firstWhere((i) => i.id == c.inventoryItem.id);
+      stock.quantity -= c.quantityToSell;
     }
-    await _service.saveItems(allItems);
+    await _service.saveItems(all);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('فروش با موفقیت نهایی شد.'), backgroundColor: Colors.green));
-    setState(() => _salesCart.clear());
+    ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('فروش نهایی شد'), backgroundColor: Colors.green));
+    setState(() {
+      _salesCart.clear();
+      _loadAllItems();
+    });
+  }
+
+  void _scanQRCode() {
+    Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) => Scaffold(
+                  appBar: AppBar(title: const Text('اسکن QR Code')),
+                  body: Directionality(
+                    textDirection: TextDirection.rtl,
+                    child: MobileScanner(
+                      onDetect: (capture) {
+                        final barcode = capture.barcodes.firstOrNull?.rawValue;
+                        if (barcode == null) return;
+                        final item = _allItems.cast<InventoryItem?>().firstWhere((i) => i?.code == barcode, orElse: () => null);
+                        if (item != null) {
+                          Navigator.pop(context);
+                          _promptForQuantity(item);
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('کالا پیدا نشد'), backgroundColor: Colors.red));
+                        }
+                      },
+                    ),
+                  ),
+                )));
   }
 
   @override
@@ -367,20 +431,20 @@ class _SalesPageState extends State<SalesPage> {
           child: Column(children: [
             Expanded(
                 child: _salesCart.isEmpty
-                    ? _buildEmptyState('سبد فروش خالی است', Icons.shopping_cart_outlined)
+                    ? _buildEmptyState('سبد خالی است', Icons.shopping_cart_outlined)
                     : ListView.builder(
                         padding: const EdgeInsets.only(top: 5, bottom: 100),
                         itemCount: _salesCart.length,
-                        itemBuilder: (context, index) {
-                          final cartItem = _salesCart[index];
+                        itemBuilder: (_, i) {
+                          final c = _salesCart[i];
                           return Card(
                               child: ListTile(
                                   leading: const Icon(Icons.shopping_basket_outlined, color: Colors.cyan),
-                                  title: Text(cartItem.inventoryItem.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                                  subtitle: Text('تعداد فروش: ${cartItem.quantityToSell} ${cartItem.inventoryItem.unit}'),
+                                  title: Text(c.inventoryItem.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                  subtitle: Text('تعداد: ${c.quantityToSell} ${c.inventoryItem.unit}'),
                                   trailing: IconButton(
                                       icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                                      onPressed: () => setState(() => _salesCart.removeAt(index)))));
+                                      onPressed: () => setState(() => _salesCart.removeAt(i)))));
                         })),
             if (_salesCart.isNotEmpty)
               Padding(
@@ -393,54 +457,37 @@ class _SalesPageState extends State<SalesPage> {
                           label: const Text('نهایی کردن فروش'),
                           style: FilledButton.styleFrom(backgroundColor: Colors.green))))
           ])),
-      floatingActionButton: FloatingActionButton.extended(
-          onPressed: _addItemToCart,
-          icon: const Icon(Icons.add_shopping_cart_rounded),
-          label: const Text('افزودن کالا'),
-          backgroundColor: Colors.cyan,
-          foregroundColor: Colors.white),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.extended(
+              onPressed: _addItemToCartManually,
+              icon: const Icon(Icons.add_shopping_cart_rounded),
+              label: const Text('افزودن کالا'),
+              backgroundColor: Colors.cyan,
+              foregroundColor: Colors.white),
+          const SizedBox(height: 12),
+          FloatingActionButton.extended(
+              onPressed: _scanQRCode,
+              icon: const Icon(Icons.qr_code_scanner_rounded),
+              label: const Text('اسکن QR Code'),
+              backgroundColor: Colors.deepPurple,
+              foregroundColor: Colors.white),
+        ],
+      ),
     );
   }
 
-  Widget _buildEmptyState(String message, IconData icon) {
-    return Center(
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      Icon(icon, size: 80, color: Colors.grey[300]),
-      const SizedBox(height: 16),
-      Text(message, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.grey))
-    ]));
-  }
-}
-
-class _SelectItemSheet extends StatelessWidget {
-  final List<InventoryItem> items;
-  const _SelectItemSheet({required this.items});
-  @override
-  Widget build(BuildContext context) {
-    return Directionality(
-        textDirection: TextDirection.rtl,
-        child: Column(children: [
-          Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Text('یک کالا برای فروش انتخاب کنید', style: Theme.of(context).textTheme.titleLarge)),
-          Expanded(
-              child: items.isEmpty
-                  ? const Center(child: Text('کالایی برای فروش در انبار موجود نیست.'))
-                  : ListView.builder(
-                      itemCount: items.length,
-                      itemBuilder: (context, index) {
-                        final item = items[index];
-                        return ListTile(
-                            title: Text(item.name),
-                            subtitle: Text('موجودی: ${item.quantity} ${item.unit}'),
-                            onTap: () => Navigator.pop(context, item));
-                      }))
-        ]));
-  }
+  Widget _buildEmptyState(String msg, IconData icon) => Center(
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Icon(icon, size: 80, color: Colors.grey[300]),
+        const SizedBox(height: 16),
+        Text(msg, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.grey))
+      ]));
 }
 
 // =================================================================
-// 5. INVENTORY MANAGEMENT PAGES
+// 5. INVENTORY LIST + QR DIALOG
 // =================================================================
 class InventoryListPage extends StatefulWidget {
   const InventoryListPage({super.key});
@@ -462,25 +509,23 @@ class _InventoryListPageState extends State<InventoryListPage> {
 
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
-    var loadedItems = await _service.loadItems();
+    final loaded = await _service.loadItems();
     if (mounted) {
       setState(() {
-        _items = loadedItems;
+        _items = loaded;
         _isLoading = false;
       });
     }
   }
 
-  void _navigateToAddEditPage({InventoryItem? item, int? index}) async {
+  void _navigateToAddEdit({InventoryItem? item, int? index}) async {
     final result = await Navigator.push<InventoryItem>(
-        context, MaterialPageRoute(builder: (context) => AddEditItemPage(item: item)));
+        context, MaterialPageRoute(builder: (_) => AddEditItemPage(item: item)));
     if (result != null) {
       setState(() {
         if (item != null && index != null) {
-          // Edit
           _items[index] = result;
         } else {
-          // Add
           _items.insert(0, result);
           _listKey.currentState?.insertItem(0, duration: const Duration(milliseconds: 400));
         }
@@ -490,132 +535,243 @@ class _InventoryListPageState extends State<InventoryListPage> {
   }
 
   void _deleteItem(InventoryItem item, int index) {
-    final removedItem = _items.removeAt(index);
-    _listKey.currentState?.removeItem(index, (context, animation) => _buildRemovedItem(removedItem, animation),
-        duration: const Duration(milliseconds: 400));
+    final removed = _items.removeAt(index);
+    _listKey.currentState?.removeItem(
+        index, (_, anim) => _buildRemovedItem(removed, anim), duration: const Duration(milliseconds: 400));
     _service.saveItems(_items);
     HapticFeedback.mediumImpact();
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${item.name} حذف شد.'), backgroundColor: Colors.redAccent));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${item.name} حذف شد'), backgroundColor: Colors.redAccent));
   }
 
-  Widget _buildRemovedItem(InventoryItem item, Animation<double> animation) {
-    return SizeTransition(
-        sizeFactor: animation, child: Opacity(opacity: 0, child: Card(child: ListTile(title: Text(item.name)))));
-  }
+  Widget _buildRemovedItem(InventoryItem item, Animation<double> anim) =>
+      SizeTransition(sizeFactor: anim, child: Opacity(opacity: 0, child: Card(child: ListTile(title: Text(item.name)))));
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('مدیریت انبار')),
       body: Directionality(
-        textDirection: TextDirection.rtl,
-        child: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : _items.isEmpty
-                ? _buildEmptyState('انباری خالی است', Icons.inventory_2_outlined)
-                : RefreshIndicator(
-                    onRefresh: _loadData,
-                    child: AnimatedList(
-                        key: _listKey,
-                        initialItemCount: _items.length,
-                        padding: const EdgeInsets.only(top: 5, bottom: 80),
-                        itemBuilder: (context, index, animation) {
-                          final item = _items[index];
-                          return SizeTransition(
-                              sizeFactor: animation,
-                              child: Slidable(
-                                  key: ValueKey(item.id),
-                                  startActionPane: ActionPane(motion: const DrawerMotion(), children: [
-                                    SlidableAction(
-                                        onPressed: (_) => _deleteItem(item, index),
-                                        backgroundColor: Colors.red,
-                                        foregroundColor: Colors.white,
-                                        icon: Icons.delete_sweep_outlined,
-                                        label: 'حذف'),
-                                    SlidableAction(
-                                        onPressed: (_) => _navigateToAddEditPage(item: item, index: index),
-                                        backgroundColor: Colors.blue,
-                                        foregroundColor: Colors.white,
-                                        icon: Icons.edit_outlined,
-                                        label: 'ویرایش')
-                                  ]),
-                                  child: Card(
-                                      child: ListTile(
-                                          leading: CircleAvatar(
-                                              backgroundColor: Colors.deepPurple.withOpacity(0.1),
-                                              foregroundColor: Colors.deepPurple,
-                                              child: const Icon(Icons.widgets_outlined)),
-                                          title: Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                                          subtitle: Text('موجودی: ${item.quantity} ${item.unit}',
-                                              style: TextStyle(
-                                                  color: item.quantity < 5 ? Colors.orange.shade700 : null,
-                                                  fontWeight: item.quantity < 5 ? FontWeight.bold : null))))));
-                        })),
-      ),
+          textDirection: TextDirection.rtl,
+          child: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : _items.isEmpty
+                  ? _buildEmptyState('انبار خالی است', Icons.inventory_2_outlined)
+                  : RefreshIndicator(
+                      onRefresh: _loadData,
+                      child: AnimatedList(
+                          key: _listKey,
+                          initialItemCount: _items.length,
+                          padding: const EdgeInsets.only(top: 5, bottom: 80),
+                          itemBuilder: (_, i, anim) {
+                            final item = _items[i];
+                            return SizeTransition(
+                                sizeFactor: anim,
+                                child: Slidable(
+                                    key: ValueKey(item.id),
+                                    startActionPane: ActionPane(motion: const DrawerMotion(), children: [
+                                      SlidableAction(
+                                          onPressed: (_) => _deleteItem(item, i),
+                                          backgroundColor: Colors.red,
+                                          foregroundColor: Colors.white,
+                                          icon: Icons.delete_sweep_outlined,
+                                          label: 'حذف'),
+                                      SlidableAction(
+                                          onPressed: (_) => _navigateToAddEdit(item: item, index: i),
+                                          backgroundColor: Colors.blue,
+                                          foregroundColor: Colors.white,
+                                          icon: Icons.edit_outlined,
+                                          label: 'ویرایش')
+                                    ]),
+                                    child: Card(
+                                        child: ListTile(
+                                            leading: CircleAvatar(
+                                                backgroundColor: Colors.deepPurple.withOpacity(0.1),
+                                                foregroundColor: Colors.deepPurple,
+                                                child: const Icon(Icons.widgets_outlined)),
+                                            title: Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                            subtitle: Text('موجودی: ${item.quantity} ${item.unit}',
+                                                style: TextStyle(
+                                                    color: item.quantity < 5 ? Colors.orange.shade700 : null,
+                                                    fontWeight: item.quantity < 5 ? FontWeight.bold : null)),
+                                            trailing: IconButton(
+                                                icon: const Icon(Icons.qr_code_rounded, color: Colors.deepPurple),
+                                                onPressed: () => showDialog(
+                                                      context: context,
+                                                      builder: (_) => QrDownloadDialog(item: item),
+                                                    ))))));
+                          }))),
       floatingActionButton: FloatingActionButton(
-          onPressed: () => _navigateToAddEditPage(),
-          tooltip: 'افزودن کالای جدید',
+          onPressed: () => _navigateToAddEdit(),
+          tooltip: 'افزودن کالا',
           child: const Icon(Icons.add_rounded)),
     );
   }
 
-  Widget _buildEmptyState(String message, IconData icon) {
-    return Center(
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      Icon(icon, size: 80, color: Colors.grey[300]),
-      const SizedBox(height: 16),
-      Text(message, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.grey)),
-      const SizedBox(height: 20),
-      FilledButton.icon(
-          onPressed: () => _navigateToAddEditPage(),
-          icon: const Icon(Icons.add_rounded),
-          label: const Text('افزودن اولین کالا'))
-    ]));
+  Widget _buildEmptyState(String msg, IconData icon) => Center(
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Icon(icon, size: 80, color: Colors.grey[300]),
+        const SizedBox(height: 16),
+        Text(msg, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.grey)),
+        const SizedBox(height: 20),
+        FilledButton.icon(
+            onPressed: () => _navigateToAddEdit(),
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('افزودن اولین کالا'))
+      ]));
+}
+
+// =================================================================
+// 6. QR DOWNLOAD DIALOG (اصلاح شده — صفحه سیاه رفع شد)
+// =================================================================
+class QrDownloadDialog extends StatefulWidget {
+  final InventoryItem item;
+  const QrDownloadDialog({super.key, required this.item});
+
+  @override
+  State<QrDownloadDialog> createState() => _QrDownloadDialogState();
+}
+
+class _QrDownloadDialogState extends State<QrDownloadDialog> {
+  final GlobalKey _qrKey = GlobalKey();
+
+  Future<void> _saveQr() async {
+    try {
+      await Future.delayed(const Duration(milliseconds: 200));
+      final boundary = _qrKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      final pngBytes = byteData!.buffer.asUint8List();
+
+      final status = await Permission.photos.request();
+      if (!status.isGranted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('دسترسی به گالری رد شد'), backgroundColor: Colors.red));
+        return;
+      }
+
+      final result = await ImageGallerySaver.saveImage(pngBytes, name: 'qr_${widget.item.name}');
+      if (result['isSuccess'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('QR Code ذخیره شد'), backgroundColor: Colors.green));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطا: $e'), backgroundColor: Colors.red));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('QR Code: ${widget.item.name}', textAlign: TextAlign.center),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          RepaintBoundary(
+            key: _qrKey,
+            child: Container(
+              width: 220,
+              height: 220,
+              color: Colors.white,
+              padding: const EdgeInsets.all(10),
+              child: QrImageView(
+                data: widget.item.code,
+                version: QrVersions.auto,
+                size: 200,
+                gapless: false,
+                errorCorrectionLevel: QrErrorCorrectLevel.H,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _saveQr,
+            icon: const Icon(Icons.download_rounded),
+            label: const Text('دانلود QR Code'),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('بستن'))
+      ],
+    );
   }
 }
 
+// =================================================================
+// 7. ADD / EDIT ITEM PAGE
+// =================================================================
 class AddEditItemPage extends StatefulWidget {
   final InventoryItem? item;
   const AddEditItemPage({super.key, this.item});
+
   @override
   State<AddEditItemPage> createState() => _AddEditItemPageState();
 }
 
 class _AddEditItemPageState extends State<AddEditItemPage> {
   final _formKey = GlobalKey<FormState>();
-  late TextEditingController _nameController;
-  late TextEditingController _quantityController;
-  late String _selectedUnit;
-  late bool _isEditing;
+  late TextEditingController _nameCtrl;
+  late TextEditingController _qtyCtrl;
+  late TextEditingController _codeCtrl;
+  late String _unit;
+  late bool _editing;
+  final GlobalKey _qrKey = GlobalKey();
 
   @override
   void initState() {
     super.initState();
-    _isEditing = widget.item != null;
-    _nameController = TextEditingController(text: widget.item?.name ?? '');
-    _quantityController = TextEditingController(text: widget.item?.quantity.toString() ?? '');
-    _selectedUnit = widget.item?.unit ?? 'عدد';
+    _editing = widget.item != null;
+    _nameCtrl = TextEditingController(text: widget.item?.name ?? '');
+    _qtyCtrl = TextEditingController(text: widget.item?.quantity.toString() ?? '');
+    _codeCtrl = TextEditingController(text: widget.item?.code ?? '');
+    _unit = widget.item?.unit ?? 'عدد';
   }
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _quantityController.dispose();
+    _nameCtrl.dispose();
+    _qtyCtrl.dispose();
+    _codeCtrl.dispose();
     super.dispose();
   }
 
-  void _saveForm() {
+  void _save() {
     if (_formKey.currentState!.validate()) {
       HapticFeedback.lightImpact();
       final newItem = InventoryItem(
-        id: _isEditing ? widget.item!.id : DateTime.now().millisecondsSinceEpoch.toString(),
-        name: _nameController.text,
-        quantity: double.parse(_quantityController.text),
-        unit: _selectedUnit,
+        id: _editing ? widget.item!.id : DateTime.now().millisecondsSinceEpoch.toString(),
+        name: _nameCtrl.text,
+        quantity: double.parse(_qtyCtrl.text),
+        unit: _unit,
+        code: _codeCtrl.text,
       );
       Navigator.pop(context, newItem);
+    }
+  }
+
+  Future<void> _saveQr() async {
+    if (_codeCtrl.text.isEmpty) return;
+    try {
+      await Future.delayed(const Duration(milliseconds: 200));
+      final boundary = _qrKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      final pngBytes = byteData!.buffer.asUint8List();
+
+      final status = await Permission.photos.request();
+      if (!status.isGranted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('دسترسی به گالری رد شد'), backgroundColor: Colors.red));
+        return;
+      }
+
+      final result = await ImageGallerySaver.saveImage(pngBytes, name: 'qr_${_nameCtrl.text}');
+      if (result['isSuccess'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('QR Code ذخیره شد'), backgroundColor: Colors.green));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطا: $e'), backgroundColor: Colors.red));
     }
   }
 
@@ -623,36 +779,99 @@ class _AddEditItemPageState extends State<AddEditItemPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isEditing ? 'ویرایش کالا' : 'افزودن کالا'),
-        actions: [IconButton(icon: const Icon(Icons.check_rounded), onPressed: _saveForm, tooltip: 'ذخیره')],
+        title: Text(_editing ? 'ویرایش کالا' : 'افزودن کالا'),
+        actions: [IconButton(icon: const Icon(Icons.check_rounded), onPressed: _save, tooltip: 'ذخیره')],
       ),
       body: Directionality(
           textDirection: TextDirection.rtl,
           child: Form(
               key: _formKey,
-              child: ListView(padding: const EdgeInsets.all(16.0), children: [
+              child: ListView(padding: const EdgeInsets.all(16), children: [
                 TextFormField(
-                    controller: _nameController,
+                    controller: _nameCtrl,
                     decoration: const InputDecoration(labelText: 'نام کالا', prefixIcon: Icon(Icons.label_outline_rounded)),
-                    validator: (value) => value == null || value.isEmpty ? 'نام کالا نمی‌تواند خالی باشد' : null),
+                    validator: (v) => v?.isEmpty ?? true ? 'نام الزامی است' : null),
                 const SizedBox(height: 16),
                 TextFormField(
-                    controller: _quantityController,
+                    controller: _qtyCtrl,
                     decoration: const InputDecoration(labelText: 'مقدار', prefixIcon: Icon(Icons.format_list_numbered_rounded)),
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    validator: (value) =>
-                        (value == null || value.isEmpty || double.tryParse(value) == null) ? 'مقدار نامعتبر است' : null),
+                    validator: (v) => (v?.isEmpty ?? true) || double.tryParse(v!) == null ? 'مقدار نامعتبر' : null),
+                const SizedBox(height: 16),
+                TextFormField(
+                    controller: _codeCtrl,
+                    decoration: const InputDecoration(labelText: 'کد محصول', prefixIcon: Icon(Icons.code_rounded)),
+                    validator: (v) => v?.isEmpty ?? true ? 'کد الزامی است' : null),
                 const SizedBox(height: 16),
                 DropdownButtonFormField<String>(
-                    value: _selectedUnit,
+                    value: _unit,
                     decoration: const InputDecoration(labelText: 'واحد', prefixIcon: Icon(Icons.straighten_rounded)),
-                    items: ['عدد', 'متر'].map((unit) => DropdownMenuItem(value: unit, child: Text(unit))).toList(),
-                    onChanged: (value) {
-                      if (value != null) setState(() => _selectedUnit = value);
-                    }),
+                    items: ['عدد', 'متر'].map((u) => DropdownMenuItem(value: u, child: Text(u))).toList(),
+                    onChanged: (v) => setState(() => _unit = v!)),
                 const SizedBox(height: 32),
-                FilledButton(onPressed: _saveForm, child: const Text('ذخیره تغییرات'))
+                if (_codeCtrl.text.isNotEmpty)
+                  Column(
+                    children: [
+                      Center(
+                        child: RepaintBoundary(
+                          key: _qrKey,
+                          child: Container(
+                            width: 220,
+                            height: 220,
+                            color: Colors.white,
+                            padding: const EdgeInsets.all(10),
+                            child: QrImageView(
+                              data: _codeCtrl.text,
+                              version: QrVersions.auto,
+                              size: 200,
+                              gapless: false,
+                              errorCorrectionLevel: QrErrorCorrectLevel.H,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: _saveQr,
+                        icon: const Icon(Icons.download_rounded),
+                        label: const Text('دانلود QR Code'),
+                      ),
+                    ],
+                  ),
+                const SizedBox(height: 32),
+                FilledButton(onPressed: _save, child: const Text('ذخیره تغییرات'))
               ]))),
     );
+  }
+}
+
+// =================================================================
+// 8. SELECT ITEM SHEET
+// =================================================================
+class _SelectItemSheet extends StatelessWidget {
+  final List<InventoryItem> items;
+  const _SelectItemSheet({required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+        textDirection: TextDirection.rtl,
+        child: Column(children: [
+          const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('یک کالا برای فروش انتخاب کنید', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+          Expanded(
+              child: items.isEmpty
+                  ? const Center(child: Text('کالایی موجود نیست'))
+                  : ListView.builder(
+                      itemCount: items.length,
+                      itemBuilder: (_, i) {
+                        final it = items[i];
+                        return ListTile(
+                            title: Text(it.name),
+                            subtitle: Text('موجودی: ${it.quantity} ${it.unit}'),
+                            onTap: () => Navigator.pop(context, it));
+                      }))
+        ]));
   }
 }
